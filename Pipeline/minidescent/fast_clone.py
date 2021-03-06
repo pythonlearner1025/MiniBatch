@@ -98,39 +98,24 @@ class MiniBatch(Pipe):
         all_loss = all_loss[::-1]
 
         if self.Lambda is None:
-            gradient_sums = [cp.einsum('abdc', all_loss[i - 1], optimize='greedy') @ all_layer[i - 1] for i in range(1, self.hidden_layer_num + 2)]
-            gradient_avg = [cp.einsum('hijk->jk', gradient, optimize='greedy') / self.batch for gradient in gradient_sums]
+            grad_sums = [cp.einsum('abdc', loss) @ layer for loss, layer in list(zip(all_loss, all_layer[:-1]))]
+            grad_avg = [cp.einsum('hijk->jk', gradient, optimize='greedy') / self.batch for gradient in grad_sums]
         elif self.Lambda is not None:
-            gradient_sums = [cp.einsum('abdc', all_loss[i - 1], optimize='greedy') @ all_layer[i - 1] for i in
-                             range(1, self.hidden_layer_num + 2)]
-            gradient_avg = [cp.einsum('hijk->jk', gradient, optimize='greedy') / self.batch for gradient in
-                            gradient_sums]
-            gradient_avg = [grad + (self.Lambda/(self.batch*self.batch_num)) * weight for grad,weight in list(zip(gradient_avg,weights))]
-        return gradient_avg
+            grad_sums = [cp.einsum('abdc', loss) @ layer for loss, layer in list(zip(all_loss, all_layer[:-1]))]
+            grad_avg= [cp.einsum('hijk->jk', gradient, optimize='greedy') / self.batch for gradient in grad_sums]
+            #regularization
+            grad_avg = [grad + (self.Lambda/(self.batch*self.batch_num)) * weight for grad, weight in list(zip(grad_avg, weights))]
+        return grad_avg
 
     def _score(self, Xtest=None, ytest=None):
         if Xtest is None and ytest is None:
-            prediction = []
-            for i in range(self.batch_num):
-                transposed_x = self.batch_x.reshape(self.batch_num, self.batch, 1, self.Xtrain.shape[1])[i][cp.newaxis]
-                prediction.append(self.forward_prop(self.final_weights, transposed_x)[-1])
-            max = []
-            for i in prediction:
-                for z in range(self.batch):
-                    max.append(cp.argmax(i[0][z], axis=1) + 1)
-            prediction = cp.array(max).flatten()
-            correct = self.batch_y.flatten()
-            ans = sum(prediction == correct) / (self.batch_num * self.batch) * 100
+            prediction = [self.forward_prop(self.final_weights, self.batch_x.reshape(self.batch_num, self.batch, 1, self.Xtrain.shape[1])[i][cp.newaxis])[-1] for i in range(self.batch_num)]
+            max = [cp.argmax(i[0][z], axis=1)+1 for i in prediction for z in range(self.batch)]
+            ans = sum(cp.array(max).flatten() == self.batch_y.flatten()) / (self.batch_num * self.batch) * 100
         elif Xtest is not None and ytest is not None:
-            batch_num = Xtest.shape[0]
-            prediction = []
-            for i in range(batch_num):
-                transposed_x = Xtest.reshape(Xtest.shape[0], 1, Xtest.shape[1])[i][cp.newaxis][cp.newaxis]
-                prediction.append(self.forward_prop(self.final_weights, transposed_x)[-1])
+            prediction = [self.forward_prop(self.final_weights, Xtest.reshape(Xtest.shape[0], 1, Xtest.shape[1])[i][cp.newaxis][cp.newaxis])[-1] for i in range(Xtest.shape[0])]
             max = [cp.argmax(i, axis=3)+1 for i in prediction]
-            prediction = cp.array(max).flatten()
-            correct = self.cparray(ytest.flatten())
-            ans = sum(prediction == correct) / batch_num * 100
+            ans = sum(cp.array(max).flatten() == self.cparray(ytest.flatten())) / Xtest.shape[0] * 100
         return ans
 
     def _predict(self, Xtest):
